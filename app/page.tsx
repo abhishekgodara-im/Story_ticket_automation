@@ -73,6 +73,12 @@ const SECTION_HEADING_LABELS: Record<string, string> = {
   "figma link": "Figma Link",
 };
 
+const FIGMA_PLAIN_TEXT_SUBHEADINGS = new Set([
+  "ui flow summary",
+  "entry points",
+  "edge cases & error states",
+]);
+
 const normalizeHeadingText = (line: string): string =>
   line
     .replace(/\*\*/g, "")
@@ -111,17 +117,36 @@ const parseTableRow = (line: string): string[] =>
     .map((cell) => cell.trim());
 const isSeparatorCell = (cell: string): boolean => /^:?-{2,}:?$/.test(cell.trim());
 const extractUrl = (value: string): string => {
-  const markdownMatch = value.match(/\((https?:\/\/[^)\s]+)\)/i);
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const markdownMatch = trimmed.match(/\((https?:\/\/[^)\s]+)\)/i);
   if (markdownMatch?.[1]) return markdownMatch[1];
-  const directMatch = value.match(/https?:\/\/[^\s)]+/i);
-  return directMatch?.[0] ?? "";
+
+  const directMatch = trimmed.match(/https?:\/\/[^\s)]+/i);
+  if (directMatch?.[0]) return directMatch[0];
+
+  if (/^(www\.)?figma\.com\/\S+$/i.test(trimmed)) {
+    return trimmed.startsWith("http") ? trimmed : `https://${trimmed}`;
+  }
+
+  return trimmed;
 };
 const renderFigmaValue = (value: string): ReactNode => {
-  const url = extractUrl(value);
-  if (url) {
+  const figmaLink = value ?? "";
+  console.log("Figma link value before render:", figmaLink);
+  if (figmaLink && figmaLink.trim() !== "") {
+    const trimmedLink = figmaLink.trim();
+    const url = extractUrl(trimmedLink);
+    const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
     return (
-      <a href={url} target="_blank" rel="noreferrer" className="link-primary text-decoration-underline">
-        {url}
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="link-primary text-decoration-underline"
+      >
+        {trimmedLink}
       </a>
     );
   }
@@ -271,7 +296,7 @@ const renderTable = (rows: string[][], keyPrefix: string): ReactNode => {
 
   return (
     <div className="table-responsive mb-3" key={`${keyPrefix}-table`}>
-      <table className="table table-bordered align-middle mb-0">
+      <table className="table table-bordered align-middle mb-0" style={{ minWidth: "900px" }}>
         <thead className="table-light">
           <tr>
             {headerRow.map((cell, cellIndex) => (
@@ -288,7 +313,7 @@ const renderTable = (rows: string[][], keyPrefix: string): ReactNode => {
                 <td
                   key={`${keyPrefix}-td-${rowIndex}-${cellIndex}`}
                   className="px-3 py-2 text-start"
-                  style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}
+                  style={{ whiteSpace: "normal", overflowWrap: "break-word" }}
                 >
                   {renderCellMarkup(cell)}
                 </td>
@@ -371,9 +396,19 @@ const renderContentLines = (
   const nodes: ReactNode[] = [];
   let index = 0;
   let renderedFigmaLine = false;
+  const normalizedSectionHeading = normalizeHeadingText(currentSectionHeading ?? "");
   const inFigmaSection =
-    normalizeHeadingText(currentSectionHeading ?? "") === "figma link" ||
-    normalizeHeadingText(currentSectionHeading ?? "") === "figma";
+    normalizedSectionHeading === "figma link" || normalizedSectionHeading === "figma";
+  const bulletsDisabledForSection =
+    normalizedSectionHeading === "acceptance criteria" ||
+    normalizedSectionHeading === "success metrics & evaluation criteria";
+
+  const shouldRenderAsBulletBlock = (textLines: ParsedLine[]): boolean => {
+    const plainTextLines = textLines.filter((item): item is Extract<ParsedLine, { kind: "text" }> => item.kind === "text");
+    if (plainTextLines.length < 2) return false;
+    const meaningfulCount = plainTextLines.filter((item) => item.text.trim().length > 0).length;
+    return meaningfulCount >= 2;
+  };
 
   while (index < lines.length) {
     const line = lines[index];
@@ -385,6 +420,58 @@ const renderContentLines = (
     }
 
     if (line.kind === "text") {
+      if (inFigmaSection) {
+        const normalizedLineText = normalizeHeadingText(line.text);
+        const isPlainTextSubheading = FIGMA_PLAIN_TEXT_SUBHEADINGS.has(normalizedLineText);
+        const figmaCandidate = extractUrl(line.text);
+        if (!isPlainTextSubheading && figmaCandidate && figmaCandidate.trim() !== "") {
+          renderedFigmaLine = true;
+          nodes.push(
+            <div key={`${keyPrefix}-text-${index}`} className="mb-3 lh-lg">
+              {renderFigmaValue(figmaCandidate)}
+            </div>
+          );
+          index += 1;
+          continue;
+        }
+      }
+
+      if (!bulletsDisabledForSection && !inFigmaSection) {
+        const textBlock: Array<Extract<ParsedLine, { kind: "text" }>> = [];
+        let blockIndex = index;
+        while (blockIndex < lines.length && lines[blockIndex].kind === "text") {
+          textBlock.push(lines[blockIndex] as Extract<ParsedLine, { kind: "text" }>);
+          blockIndex += 1;
+        }
+
+        if (shouldRenderAsBulletBlock(textBlock)) {
+          nodes.push(
+            <ul key={`${keyPrefix}-autobullets-${index}`} className="mb-3 ps-4 lh-lg">
+              {textBlock.map((textLine, itemIndex) => {
+                const labelMatch = textLine.text.match(/^\s*([A-Za-z][A-Za-z0-9 /&()'-]{1,45}):\s*(.+)?$/);
+                if (labelMatch) {
+                  const label = labelMatch[1].trim();
+                  const value = labelMatch[2] ?? "";
+                  return (
+                    <li key={`${keyPrefix}-autobullet-item-${index}-${itemIndex}`} className="mb-2">
+                      <strong>{label}:</strong> {renderInlineMarkup(value)}
+                    </li>
+                  );
+                }
+
+                return (
+                  <li key={`${keyPrefix}-autobullet-item-${index}-${itemIndex}`} className="mb-2">
+                    {renderInlineMarkup(textLine.text)}
+                  </li>
+                );
+              })}
+            </ul>
+          );
+          index = blockIndex;
+          continue;
+        }
+      }
+
       const labelMatch = line.text.match(/^\s*([A-Za-z][A-Za-z0-9 /&()'-]{1,45}):\s*(.+)?$/);
       if (labelMatch) {
         const label = labelMatch[1].trim();
@@ -409,20 +496,6 @@ const renderContentLines = (
         }
         index += 1;
         continue;
-      }
-
-      if (inFigmaSection) {
-        const trimmedText = line.text.trim();
-        if (trimmedText) {
-          renderedFigmaLine = true;
-          nodes.push(
-            <div key={`${keyPrefix}-text-${index}`} className="mb-3 lh-lg">
-              {renderFigmaValue(trimmedText)}
-            </div>
-          );
-          index += 1;
-          continue;
-        }
       }
 
       nodes.push(
@@ -1062,8 +1135,8 @@ export default function Home() {
             </div>
           ) : (
             <div
-              className="card shadow-lg p-5 mx-auto"
-              style={{ maxWidth: "720px", width: "100%", borderRadius: "20px" }}
+              className="card shadow-lg p-4 p-md-5"
+              style={{ width: "100%", borderRadius: "20px" }}
             >
               <h1 className="mb-4 fw-bold text-primary">Reconstruct Ticket</h1>
 
