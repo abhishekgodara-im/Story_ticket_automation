@@ -10,12 +10,16 @@ type TabKey =
   | "classify-bug-priority"
   | "bug-reported-so-far"
   | "indiamart-bug-guidelines"
-  | "add-ticket-to-sprint";
+  | "add-ticket-to-sprint"
+  | "hp-mp-bugs-status"
+  | "current-status"
+  | "new-ticket";
 type NavGroupKey =
   | "mobile-app-story-ticket-development"
   | "product-bug-classifier"
   | "docs"
-  | "sprint-task";
+  | "sprint-task"
+  | "product-bug-status";
 type GenericRecord = Record<string, unknown>;
 
 const DEFAULT_OPEN_NAV_GROUPS: Record<NavGroupKey, boolean> = {
@@ -23,6 +27,7 @@ const DEFAULT_OPEN_NAV_GROUPS: Record<NavGroupKey, boolean> = {
   "product-bug-classifier": false,
   docs: false,
   "sprint-task": false,
+  "product-bug-status": false,
 };
 
 const CLOSED_NAV_GROUPS: Record<NavGroupKey, boolean> = {
@@ -30,6 +35,7 @@ const CLOSED_NAV_GROUPS: Record<NavGroupKey, boolean> = {
   "product-bug-classifier": false,
   docs: false,
   "sprint-task": false,
+  "product-bug-status": false,
 };
 
 const isRecord = (value: unknown): value is GenericRecord =>
@@ -708,6 +714,11 @@ export default function Home() {
   const [isBasicTemplateOpen, setIsBasicTemplateOpen] = useState(true);
   const [isBotTemplateOpen, setIsBotTemplateOpen] = useState(false);
 
+  const [newTicketId, setNewTicketId] = useState("");
+  const [newTicketLoading, setNewTicketLoading] = useState(false);
+  const [newTicketError, setNewTicketError] = useState("");
+  const [newTicketResult, setNewTicketResult] = useState<unknown | null>(null);
+
   const handleGenerate = async () => {
     const trimmedId = ticketId.trim();
 
@@ -859,6 +870,45 @@ export default function Home() {
     }
   };
 
+  const handleNewTicketSubmit = async () => {
+    const trimmedId = newTicketId.trim();
+    if (!trimmedId) {
+      setNewTicketError("Please enter a Ticket ID.");
+      return;
+    }
+    setNewTicketLoading(true);
+    setNewTicketError("");
+    setNewTicketResult(null);
+
+    try {
+      const response = await fetch(
+        "https://imworkflow.intermesh.net/webhook/classify-ticket",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ticketId: trimmedId }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+      
+      const rawText = await response.text();
+      const parsedResponse = parseJsonIfString(rawText);
+      const unwrapped = unwrapWebhookPayload(parsedResponse);
+     
+      setNewTicketResult(unwrapped);
+    } catch (error) {
+      console.error(error);
+      setNewTicketError(getErrorMessage(error));
+    } finally {
+      setNewTicketLoading(false);
+    }
+  };
+
   const navGroups: Array<{
     key: NavGroupKey;
     label: string;
@@ -913,6 +963,24 @@ export default function Home() {
         {
           key: "add-ticket-to-sprint",
           label: "Add Ticket To Sprint",
+        },
+      ],
+    },
+    {
+      key: "product-bug-status",
+      label: "Product Bug Status",
+      items: [
+        {
+          key: "hp-mp-bugs-status",
+          label: "HP+MP Product Bugs",
+        },
+        {
+          key: "current-status",
+          label: "Current Release Status",
+        },
+        {
+          key: "new-ticket",
+          label: "Ticket Status",
         },
       ],
     },
@@ -1194,6 +1262,46 @@ export default function Home() {
                           </div>
                         </div>
                       </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-12 col-lg-6">
+                  <div className="card border shadow-sm h-100">
+                    <div className="card-body p-4">
+                      <div className="d-flex justify-content-between align-items-center mb-3">
+                        <h2 className="h5 fw-bold mb-0">{"\uD83D\uDEA8"} Product Bug Status</h2>
+                        <span className="badge bg-primary-subtle text-primary">3 Steps</span>
+                      </div>
+                      <div className="d-grid gap-2">
+                        <button type="button" className="btn btn-light border text-start p-3" onClick={() => setActiveTab("hp-mp-bugs-status")}>
+                          <div className="d-flex gap-3">
+                            <span className="rounded-circle bg-primary text-white d-inline-flex align-items-center justify-content-center flex-shrink-0" style={{ width: "28px", height: "28px" }}>1</span>
+                            <div>
+                              <div className="fw-semibold">HP+MP Product Bugs</div>
+                              <div className="small text-muted">Join Android and iOS spaces</div>
+                            </div>
+                          </div>
+                        </button>
+                        <button type="button" className="btn btn-light border text-start p-3" onClick={() => setActiveTab("current-status")}>
+                          <div className="d-flex gap-3">
+                            <span className="rounded-circle bg-primary text-white d-inline-flex align-items-center justify-content-center flex-shrink-0" style={{ width: "28px", height: "28px" }}>2</span>
+                            <div>
+                              <div className="fw-semibold">Current Release Status</div>
+                              <div className="small text-muted">Join the current release space</div>
+                            </div>
+                          </div>
+                        </button>
+                        <button type="button" className="btn btn-light border text-start p-3" onClick={() => setActiveTab("new-ticket")}>
+                          <div className="d-flex gap-3">
+                            <span className="rounded-circle bg-primary text-white d-inline-flex align-items-center justify-content-center flex-shrink-0" style={{ width: "28px", height: "28px" }}>3</span>
+                            <div>
+                              <div className="fw-semibold">Ticket Status</div>
+                              <div className="small text-muted">Check ticket classification status</div>
+                            </div>
+                          </div>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2299,6 +2407,178 @@ export default function Home() {
                   />
                 </div>
               </section>
+            </div>
+          ) : activeTab === "hp-mp-bugs-status" ? (
+            <div
+              className="card shadow-lg p-4 p-md-5"
+              style={{ width: "100%", borderRadius: "20px", minHeight: "100%" }}
+            >
+              <h1 className="mb-4 fw-bold text-primary text-center">HP+MP Product Bugs</h1>
+              <p className="text-muted mb-4 text-center">
+                Join the dedicated spaces for Android and iOS bug tracking.
+              </p>
+              
+              <div className="d-grid gap-3">
+                <a
+                  href="https://chat.google.com/room/AAQAYfqC_ps?cls=4"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-outline-primary d-inline-flex justify-content-center align-items-center py-3"
+                >
+                  Join Android Space
+                </a>
+                <a
+                  href="https://chat.google.com/room/AAQAmPeTxYo?cls=4"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-outline-primary d-inline-flex justify-content-center align-items-center py-3"
+                >
+                  Join iOS Space
+                </a>
+              </div>
+            </div>
+          ) : activeTab === "current-status" ? (
+            <div
+              className="card shadow-lg p-4 p-md-5"
+              style={{ width: "100%", borderRadius: "20px", minHeight: "100%" }}
+            >
+              <h1 className="mb-4 fw-bold text-primary text-center">Current Release Status</h1>
+              <p className="text-muted mb-4 text-center">
+                Join our Google Space to stay updated on the current release status.
+              </p>
+              <div className="d-grid">
+                <a
+                  href="https://chat.google.com/room/AAQAr0RFrzQ?cls=4"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-primary d-inline-flex justify-content-center align-items-center py-3"
+                >
+                  Join Release Space
+                </a>
+              </div>
+            </div>
+          ) : activeTab === "new-ticket" ? (
+            <div
+              className="card shadow-lg p-4 p-md-5"
+              style={{ width: "100%", borderRadius: "20px", minHeight: "100%" }}
+            >
+              <h1 className="mb-4 fw-bold text-primary text-center">Ticket Status</h1>
+              <p className="text-muted mb-4 text-center">
+                Enter your ticket ID to check its status.
+              </p>
+
+              <div className="mb-3">
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="Enter Ticket ID"
+                  value={newTicketId}
+                  onChange={(e) => setNewTicketId(e.target.value)}
+                />
+              </div>
+
+              <div className="d-grid">
+                <button
+                  className="btn btn-primary d-flex justify-content-center align-items-center py-2"
+                  onClick={handleNewTicketSubmit}
+                  disabled={newTicketLoading}
+                >
+                  {newTicketLoading && (
+                    <span
+                      className="spinner-border spinner-border-sm me-2"
+                      role="status"
+                      aria-hidden="true"
+                    />
+                  )}
+                  {newTicketLoading ? "Checking Status..." : "Check Status"}
+                </button>
+              </div>
+
+              {newTicketError && (
+                <div className="alert alert-danger mt-3 mb-0" role="alert">
+                  {newTicketError}
+                </div>
+              )}
+{newTicketResult !== null && (
+  <div className="card border mt-4 text-start">
+    <div className="card-body">
+      {(() => {
+        const rawResult = newTicketResult as Record<string, unknown>;
+        const unwrappedResult = Array.isArray(rawResult)
+          ? (rawResult[0] as Record<string, unknown>)
+          : rawResult;
+
+        let ticketData: Record<string, unknown> | null = null;
+        if (unwrappedResult) {
+          if (unwrappedResult.ticket) {
+            ticketData = unwrappedResult.ticket as Record<string, unknown>;
+          } else {
+            ticketData = unwrappedResult;
+          }
+        }
+
+        if (ticketData) {
+          return (
+            <div>
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <h3 className="h5 mb-0 fw-bold">
+                  Ticket #{String(ticketData.ticket_id ?? "")}
+                </h3>
+                <span
+                  className={`badge ${
+                    ticketData.bifurcation_status === "Not Acknowledged"
+                      ? "bg-warning text-dark"
+                      : "bg-info"
+                  }`}
+                >
+                  {String(ticketData.bifurcation_status ?? "")}
+                </span>
+              </div>
+
+              <p className="mb-2">
+                <strong>Confidence Score:</strong>{" "}
+                <span className="badge bg-secondary">
+                  {String(ticketData.confidence_score ?? "")}
+                </span>
+              </p>
+
+              <p className="mb-2">
+                <strong>Bifurcation Justification:</strong>
+              </p>
+              <div className="p-3 bg-light rounded mb-3 border">
+                {String(ticketData.Bifurcation_justification ?? "")}
+              </div>
+
+              <p className="mb-2">
+                <strong>AI Summary:</strong>
+              </p>
+              <div
+                className="p-3 bg-light rounded border"
+                style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+              >
+                {String(ticketData["AI Summary"] ?? "")}
+              </div>
+            </div>
+          );
+        }
+
+        const displayOutput =
+          typeof newTicketResult === "string"
+            ? newTicketResult
+            : JSON.stringify(newTicketResult, null, 2);
+
+        return (
+          <pre
+            className="mb-0 text-muted"
+            style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          >
+            {displayOutput}
+          </pre>
+        );
+      })()}
+    </div>
+  </div>
+)}
             </div>
           ) : (
             <div
