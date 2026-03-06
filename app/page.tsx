@@ -2,8 +2,27 @@
 
 import { ReactNode, useMemo, useState } from "react";
 
-type TabKey = "try-it-now" | "reporting" | "reconstruct-ticket";
+type TabKey =
+  | "review-story-ticket"
+  | "mobile-app-story-template"
+  | "rebuild-existing-story"
+  | "classify-bug-priority"
+  | "bug-reported-so-far"
+  | "indiamart-bug-guidelines";
+type NavGroupKey = "mobile-app-story-ticket-development" | "product-bug-classifier" | "docs";
 type GenericRecord = Record<string, unknown>;
+
+const DEFAULT_OPEN_NAV_GROUPS: Record<NavGroupKey, boolean> = {
+  "mobile-app-story-ticket-development": true,
+  "product-bug-classifier": false,
+  docs: false,
+};
+
+const CLOSED_NAV_GROUPS: Record<NavGroupKey, boolean> = {
+  "mobile-app-story-ticket-development": false,
+  "product-bug-classifier": false,
+  docs: false,
+};
 
 const isRecord = (value: unknown): value is GenericRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -131,6 +150,16 @@ const extractUrl = (value: string): string => {
   }
 
   return trimmed;
+};
+
+const extractAnchorHref = (html: string): string => {
+  const match = html.match(/<a[^>]+href=["']([^"']+)["']/i);
+  return match?.[1]?.trim() ?? "";
+};
+
+const parseTicketIdFromWorkPackageHref = (href: string): string => {
+  const segments = href.split("/").filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : "";
 };
 const renderFigmaValue = (value: string): ReactNode => {
   const figmaLink = value ?? "";
@@ -634,8 +663,23 @@ export default function Home() {
   const [reconstructLoading, setReconstructLoading] = useState(false);
   const [reconstructError, setReconstructError] = useState<string>("");
   const [reconstructResponse, setReconstructResponse] = useState<string | null>(null);
+  const [classifyTicketId, setClassifyTicketId] = useState("");
+  const [classifyLoading, setClassifyLoading] = useState(false);
+  const [classifyError, setClassifyError] = useState("");
+  const [classifyResult, setClassifyResult] = useState<{
+    activityId: string;
+    ticketId: string;
+    workPackageTitle: string;
+    googleFormUrl: string;
+    activityUrl: string;
+  } | null>(null);
   const [isDrawerCollapsed, setIsDrawerCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabKey>("try-it-now");
+  const [activeTab, setActiveTab] = useState<TabKey>("review-story-ticket");
+  const [openNavGroups, setOpenNavGroups] =
+    useState<Record<NavGroupKey, boolean>>(DEFAULT_OPEN_NAV_GROUPS);
+  const [savedOpenNavGroups, setSavedOpenNavGroups] = useState<Record<NavGroupKey, boolean> | null>(
+    null
+  );
   const [isMissingOpen, setIsMissingOpen] = useState(true);
   const [isWeakOpen, setIsWeakOpen] = useState(true);
   const [isSummaryOpen, setIsSummaryOpen] = useState(true);
@@ -731,13 +775,119 @@ export default function Home() {
     }
   };
 
-  const navItems: Array<{ key: TabKey; label: string; shortLabel: string }> = [
-    { key: "try-it-now", label: "Try It Now", shortLabel: "Try" },
-    { key: "reporting", label: "Reporting", shortLabel: "Rep" },
-    { key: "reconstruct-ticket", label: "Reconstruct Ticket", shortLabel: "Rebuild" },
+  const handleClassifyBug = async () => {
+    const trimmedId = classifyTicketId.trim();
+
+    if (!trimmedId) {
+      setClassifyError("Failed to classify ticket. Please check the ticket ID and try again.");
+      return;
+    }
+
+    setClassifyLoading(true);
+    setClassifyError("");
+    setClassifyResult(null);
+
+    try {
+      const response = await fetch(
+        `https://imworkflow.intermesh.net/webhook/indiamart_bug_priority_classifier_1?ticket_id=${encodeURIComponent(trimmedId)}`,
+        {
+          method: "GET",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const rawText = await response.text();
+      const parsedResponse = unwrapWebhookPayload(parseJsonIfString(rawText));
+      const payload = isRecord(parsedResponse) ? parsedResponse : null;
+
+      if (!payload) {
+        throw new Error("Unexpected response shape");
+      }
+
+      const activityId = asText(payload.id);
+      const links = isRecord(payload._links) ? payload._links : {};
+      const workPackage = isRecord(links.workPackage) ? links.workPackage : {};
+      const workPackageTitle = asText(workPackage.title);
+      const workPackageHref = asText(workPackage.href);
+      const parsedTicketId = parseTicketIdFromWorkPackageHref(workPackageHref);
+      const comment = isRecord(payload.comment) ? payload.comment : {};
+      const commentHtml = asText(comment.html);
+      const googleFormUrl = extractAnchorHref(commentHtml);
+
+      if (!activityId || !workPackageTitle || !parsedTicketId || !googleFormUrl) {
+        throw new Error("Missing required values in response");
+      }
+
+      setClassifyResult({
+        activityId,
+        ticketId: parsedTicketId,
+        workPackageTitle,
+        googleFormUrl,
+        activityUrl: `https://project.intermesh.net/projects/android/work_packages/${parsedTicketId}/activity`,
+      });
+    } catch (error) {
+      console.error(error);
+      setClassifyError("Failed to classify ticket. Please check the ticket ID and try again.");
+    } finally {
+      setClassifyLoading(false);
+    }
+  };
+
+  const navGroups: Array<{
+    key: NavGroupKey;
+    label: string;
+    items: Array<{ key: TabKey; label: string }>;
+  }> = [
+    {
+      key: "mobile-app-story-ticket-development",
+      label: "Mobile App Story Ticket Development",
+      items: [
+        {
+          key: "mobile-app-story-template",
+          label: "Mobile App Story Template",
+        },
+        {
+          key: "rebuild-existing-story",
+          label: "Rebuild Existing Story",
+        },
+        {
+          key: "review-story-ticket",
+          label: "Review Story Ticket",
+        },
+      ],
+    },
+    {
+      key: "product-bug-classifier",
+      label: "Product Bug Classifier",
+      items: [
+        {
+          key: "classify-bug-priority",
+          label: "Classify Bug Priority",
+        },
+        {
+          key: "bug-reported-so-far",
+          label: "Bug Reported So Far",
+        },
+      ],
+    },
+    {
+      key: "docs",
+      label: "Docs",
+      items: [
+        {
+          key: "indiamart-bug-guidelines",
+          label: "IndiaMART Bug Guidelines",
+        },
+      ],
+    },
   ];
 
   const normalizedReport = useMemo(() => {
+    if (!report) return null;
+
     const normalized = Array.isArray(report) ? report[0] : report;
     const data = isRecord(normalized) ? normalized : {};
     const header = isRecord(data?.report_header) ? data.report_header : {};
@@ -813,7 +963,19 @@ export default function Home() {
           <button
             type="button"
             className="btn btn-outline-primary btn-sm"
-            onClick={() => setIsDrawerCollapsed((prev) => !prev)}
+            onClick={() => {
+              setIsDrawerCollapsed((prev) => {
+                const next = !prev;
+                if (next) {
+                  setSavedOpenNavGroups(openNavGroups);
+                  setOpenNavGroups(CLOSED_NAV_GROUPS);
+                } else {
+                  setOpenNavGroups(savedOpenNavGroups ?? DEFAULT_OPEN_NAV_GROUPS);
+                  setSavedOpenNavGroups(null);
+                }
+                return next;
+              });
+            }}
             aria-label={
               isDrawerCollapsed
                 ? "Expand navigation drawer"
@@ -825,30 +987,57 @@ export default function Home() {
         </div>
 
         <nav className="p-2 d-grid gap-2">
-          {navItems.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`btn text-start ${
-                activeTab === item.key ? "btn-primary" : "btn-outline-primary"
-              }`}
-              onClick={() => setActiveTab(item.key)}
-            >
-              {isDrawerCollapsed ? item.shortLabel : item.label}
-            </button>
-          ))}
+          {navGroups.map((group) => {
+            const isGroupOpen = openNavGroups[group.key];
+            return (
+              <div key={group.key} className="border rounded">
+                <button
+                  type="button"
+                  className="btn btn-light w-100 text-start d-flex align-items-center justify-content-between fw-semibold"
+                  onClick={() =>
+                    setOpenNavGroups((prev) => ({
+                      ...prev,
+                      [group.key]: !prev[group.key],
+                    }))
+                  }
+                >
+                  <span>{isDrawerCollapsed ? group.label.split(" ")[0] : group.label}</span>
+                  <span>{isGroupOpen ? "-" : "+"}</span>
+                </button>
+
+                {!isDrawerCollapsed && isGroupOpen && (
+                  <div className="d-grid gap-2 p-2 pt-1">
+                    {group.items.map((item, index) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        className={`btn text-start ps-3 ${
+                          activeTab === item.key ? "btn-primary" : "btn-outline-primary"
+                        }`}
+                        onClick={() => setActiveTab(item.key)}
+                      >
+                        {isDrawerCollapsed
+                          ? `${index + 1}.`
+                          : `${index + 1}. ${item.label}`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </nav>
       </aside>
 
       <main className="flex-grow-1 p-4">
         <div className="w-100 mx-auto" style={{ maxWidth: "980px" }}>
-          {activeTab === "try-it-now" ? (
+          {activeTab === "review-story-ticket" ? (
             <>
               <div
                 className="card shadow-lg p-5 text-center mx-auto mb-4"
                 style={{ maxWidth: "520px", width: "100%", borderRadius: "20px" }}
               >
-                <h1 className="mb-4 fw-bold text-primary">Test Your Ticket</h1>
+                <h1 className="mb-4 fw-bold text-primary">Review Story Ticket</h1>
                 <p className="text-muted mb-4">
                   Enter your story ticket ID and generate a quality assessment report
                   instantly.
@@ -1038,7 +1227,14 @@ export default function Home() {
                           <div className="accordion-body">
                             <p className="mb-2">
                               <strong>Overall Assessment:</strong>{" "}
-                              <span className={`badge ${getScoreBandBadgeClass(normalizedReport?.scoreBand || "")}`}>
+                              <span
+                                className={`badge ${getScoreBandBadgeClass(normalizedReport?.scoreBand || "")}`}
+                                style={{
+                                  whiteSpace: "normal",
+                                  overflowWrap: "anywhere",
+                                  wordBreak: "break-word",
+                                }}
+                              >
                                 {asText(normalizedReport?.summary?.overall_assessment) || "N/A"}
                               </span>
                             </p>
@@ -1123,22 +1319,12 @@ export default function Home() {
                 </section>
               )}
             </>
-          ) : activeTab === "reporting" ? (
-            <div
-              className="card shadow-lg p-5 text-center mx-auto"
-              style={{ maxWidth: "520px", width: "100%", borderRadius: "20px" }}
-            >
-              <h1 className="mb-3 fw-bold text-primary">Reporting</h1>
-              <p className="text-muted mb-0">
-                Reporting view is ready. Add your analytics components here.
-              </p>
-            </div>
-          ) : (
+          ) : activeTab === "rebuild-existing-story" ? (
             <div
               className="card shadow-lg p-4 p-md-5"
               style={{ width: "100%", borderRadius: "20px" }}
             >
-              <h1 className="mb-4 fw-bold text-primary">Reconstruct Ticket</h1>
+              <h1 className="mb-4 fw-bold text-primary">Rebuild Existing Story</h1>
 
               <div className="mb-3">
                 <label htmlFor="reconstruct-ticket-id" className="form-label fw-semibold">
@@ -1185,6 +1371,94 @@ export default function Home() {
                   </div>
                 </div>
               )}
+            </div>
+          ) : activeTab === "classify-bug-priority" ? (
+            <div
+              className="card shadow-lg p-5 text-center mx-auto"
+              style={{ maxWidth: "520px", width: "100%", borderRadius: "20px" }}
+            >
+              <h1 className="mb-4 fw-bold text-primary">Classify Bug Priority</h1>
+              <p className="text-muted mb-4">
+                Enter your ticket ID to classify its bug priority using AI.
+              </p>
+
+              <input
+                type="text"
+                className="form-control mb-3"
+                placeholder="Enter Ticket ID"
+                value={classifyTicketId}
+                onChange={(e) => setClassifyTicketId(e.target.value)}
+              />
+
+              <button
+                className="btn btn-primary w-100 d-flex justify-content-center align-items-center"
+                onClick={handleClassifyBug}
+                disabled={classifyLoading}
+              >
+                {classifyLoading && (
+                  <span
+                    className="spinner-border spinner-border-sm me-2"
+                    role="status"
+                    aria-hidden="true"
+                  />
+                )}
+                {classifyLoading ? "Classifying..." : "Classify Bug"}
+              </button>
+
+              {classifyError && (
+                <div className="alert alert-danger mt-3 mb-0" role="alert">
+                  {classifyError}
+                </div>
+              )}
+
+              {classifyResult && (
+                <div className="card border mt-4 text-start">
+                  <div className="card-body">
+                    <h2 className="h5 text-success mb-3">{"\u2705"} Bug Priority Classification Initiated</h2>
+                    <p className="mb-2">
+                      The Google Form for ticket #{classifyResult.ticketId} {"\u2014"} &quot;{classifyResult.workPackageTitle}&quot; has been sent to the activity section.
+                    </p>
+                    <p className="mb-0">
+                      Once submitted, view the agent&apos;s response in the comments here:{" "}
+                      <a
+                        href={classifyResult.activityUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="link-primary text-decoration-underline"
+                      >
+                        {"\uD83D\uDD17"} {classifyResult.activityUrl}
+                      </a>
+                    </p>
+                    <p className="text-muted small mt-3 mb-0">
+                      Activity ID: {classifyResult.activityId}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : activeTab === "mobile-app-story-template" ? (
+            <div
+              className="card shadow-lg p-5 text-center mx-auto"
+              style={{ maxWidth: "520px", width: "100%", borderRadius: "20px" }}
+            >
+              <h1 className="mb-3 fw-bold text-primary">Mobile App Story Template</h1>
+              <p className="text-muted mb-0">This section is coming soon.</p>
+            </div>
+          ) : activeTab === "bug-reported-so-far" ? (
+            <div
+              className="card shadow-lg p-5 text-center mx-auto"
+              style={{ maxWidth: "520px", width: "100%", borderRadius: "20px" }}
+            >
+              <h1 className="mb-3 fw-bold text-primary">Bug Reported So Far</h1>
+              <p className="text-muted mb-0">This section is coming soon.</p>
+            </div>
+          ) : (
+            <div
+              className="card shadow-lg p-5 text-center mx-auto"
+              style={{ maxWidth: "520px", width: "100%", borderRadius: "20px" }}
+            >
+              <h1 className="mb-3 fw-bold text-primary">IndiaMART Bug Guidelines</h1>
+              <p className="text-muted mb-0">This section is coming soon.</p>
             </div>
           )}
         </div>
